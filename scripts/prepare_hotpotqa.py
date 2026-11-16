@@ -33,7 +33,7 @@ usable_df = qa_df.loc[para_filt].copy()
 
 usable_df["sentence_tag"] = usable_df.groupby(["id", "title"])["contains_answer"].transform(lambda x: x.any()).map({True: "B", False: "A"})
 
-usable_df.to_parquet("data/hotpotqa/hotpot_bridge_ab.parquet")
+usable_df.to_parquet("../data/hotpotqa/hotpot_bridge_ab.parquet")
 
 print("bridge questions:", len(hotpotqa_df))
 print("paragraphs containing the answer per question:")
