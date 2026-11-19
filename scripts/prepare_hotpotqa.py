@@ -1,5 +1,8 @@
+from pathlib import Path
 from datasets import load_dataset
 import pandas as pd
+
+data_dir = Path(__file__).parent.parent / "data" / "hotpotqa"
 
 hotpotqa = load_dataset("hotpotqa/hotpot_qa", "distractor", split="validation")
 hotpotqa_df = pd.DataFrame(hotpotqa).set_index("id")
@@ -33,7 +36,7 @@ usable_df = qa_df.loc[para_filt].copy()
 
 usable_df["sentence_tag"] = usable_df.groupby(["id", "title"])["contains_answer"].transform(lambda x: x.any()).map({True: "B", False: "A"})
 
-usable_df.to_parquet("../data/hotpotqa/hotpot_bridge_ab.parquet")
+usable_df.to_parquet(data_dir.joinpath("hotpot_bridge_ab.parquet"))
 
 print("bridge questions:", len(hotpotqa_df))
 print("paragraphs containing the answer per question:")
