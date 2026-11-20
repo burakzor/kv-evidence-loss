@@ -1,0 +1,21 @@
+id,question,gold,answer,contains,contains_alias,f1,human_correct
+5ab29426554299545a2cf99f,Calvin Murphy's record of being the shortest NBA player to play in an All-Star Game was tied by a player who was sent to what team in 2017?,Cavaliers,Cleveland Cavaliers,True,True,0.6666666666666666,True
+5adcfe5f5542992c1e3a24f0,Batthyany belongs to a Hungarian family with what Latin meaning?,great man,great man,True,True,1.0,True
+5a8d51355542994ba4e3dc6b,What color was the dog that Socks had conflicts with?,chocolate-colored,Chocolate-colored,True,True,1.0,True
+5ae7e9af5542994a481bbe0e,What is the 2010 census population of the city in which Antonio Carmona Añorve was the director of police?,"689,775","689,775",True,True,1.0,True
+5a845b2d5542996488c2e520,Back Up n da Chevy was an album by the rap group from what city?,"Atlanta, Georgia","Atlanta, Georgia",True,True,1.0,True
+5a7a37b85542996c55b2dd3f,Nicholas Medforth-Mills is a grandson to a king who was born on what day and year?,25 October 1921,25 October 1921,True,True,1.0,True
+5ab8ffc655429934fafe6e30,Postal 2 has scenes that are used in a song that was released in what year?,June 2003,2003,False,True,0.6666666666666666,True
+5a8da70a5542994ba4e3dcea,Ashly Burch is known for voicing Aloy in a video game released in what year?,2017,2017,True,True,1.0,True
+5a7e1ad155429965cec5ea66,The first book in the Sprawl Trilogy won what three awards?,"Nebula Award, the Philip K. Dick Award, and the Hugo Award","Nebula Award, the Philip K. Dick Award, and the Hugo Award",True,True,1.0,True
+5a8072a5554299485f5985f1,What separates the islands where the 2015 Africa Magic Viewers Choice Awards were held?,creeks,creeks,True,True,1.0,True
+5abe7c515542993f32c2a128,How many marchers were in the protest that Pelham D. Glassford ended? ,"43,000 marchers","43,000",False,True,0.6666666666666666,True
+5ab8750255429934fafe6dd1,What is the southern border of the neighborhood that the Bruce Silverstein Gallery is located in?,14th Street,14th Street,True,True,1.0,True
+5ab31864554299233954ff06,What class of instrument does Apatim Majumdar play?,strings,Indian classical instrument,False,False,0.0,False
+5a7a19765542996a35c170cf,Pashto is the main language among a diaspora that has it's largest community in which country ?,Pakistan,Pakistan,True,True,1.0,True
+5a8e39475542995085b373f1,Paddington is a television program based on the books that first appeared on what date?,13 October 1958,13 October 1958,True,True,1.0,True
+5ae254565542992decbdccbb,"In what year was the writer of the drama ""Ingenious"" born?",1959,1959,True,True,1.0,True
+5a7750a155429966f1a36cef,Who died and had his dog wait in Japan for him for 9 years after his death?,Hidesaburō Ueno,Hachikō,False,False,0.0,False
+5ae306115542992decbdcdc4,What is the brand who makes canned meats that had its own cook off in Austin until 2007?,Hormel Foods Corporation,Spamarama,False,False,0.0,False
+5a8b595855429949d91db563,"In what year was the band, whose bassist joined Arvas in 1996, formed?",1992,1993,False,False,0.0,False
+5a90997b5542995651fb51af,The song Justice was used for a WWE event that took place on what day ?,"May 1, 2011","April 6, 2014",False,False,0.0,False
