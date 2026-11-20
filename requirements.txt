@@ -1,4 +1,6 @@
+accelerate
 datasets
 pandas
 pyarrow
+torch
 transformers
