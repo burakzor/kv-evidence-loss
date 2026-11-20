@@ -20,3 +20,6 @@ results/raw/
 
 # Secrets
 .env
+
+#Local Documents
+plans/
