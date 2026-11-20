@@ -3,4 +3,5 @@ datasets
 pandas
 pyarrow
 torch
+tqdm
 transformers
