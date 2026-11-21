@@ -22,7 +22,7 @@ def get_retention_by_layer(kept, spans):
 if __name__ == "__main__":
     data_dir = Path(__file__).parent.parent / "data" / "hotpotqa"
     results_dir = Path(__file__).parent.parent / "results"
-    kept_dir = results_dir / "raw" / "kept_test"
+    kept_dir = results_dir / "raw" / "kept"
 
     spans_df = pd.read_parquet(data_dir.joinpath("hotpot_token_spans_qwen3_8b.parquet"))
 
