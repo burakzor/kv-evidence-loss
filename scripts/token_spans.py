@@ -2,25 +2,7 @@ from pathlib import Path
 from datasets import load_dataset
 from transformers import AutoTokenizer
 import pandas as pd
-
-def build_text(c, question):
-    """Return the prompt text and character spans in the sentences."""
-    text = ""
-    spans = {}
-    for title, sents in zip(c["title"], c["sentences"]):
-        for sent_id, sent in enumerate(sents):
-            start = len(text)
-            text += sent
-            end = len(text)
-            spans[(title, sent_id)] = (start, end)
-        text += "\n\n"
-    text += "Question: " + question
-    return text, spans
-
-def get_prompt(tok, text):
-    """Return the chat prompt to give to the model for a text."""
-    messages = [{"role": "user", "content": text}]
-    return tok.apply_chat_template(messages, tokenize=False, add_generation_prompt=True, enable_thinking=False)
+from prompts import build_text, get_prompt
 
 def get_token_span(offsets, start, end):
     """Return the starting and ending token of a sentence."""
