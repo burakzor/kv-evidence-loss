@@ -14,6 +14,9 @@ FULL_PATH = ANSWERS_DIR / "full_1.0.parquet"
 
 CONDITIONS = ["a_only", "b_only", "no_ctx"]
 
+# b_only is recorded but not filtered on: with B as the only paragraph the model answers 156/169 (single-paragraph shortcut)
+KEEP_CONDITIONS = ["a_only", "no_ctx"]
+
 MIN_KEEP = 100
 
 def load_ab_titles(ids: pd.Index) -> pd.DataFrame:
@@ -39,10 +42,13 @@ def run_condition(model: PreTrainedModel, tok: PreTrainedTokenizerBase, question
     print(f"\n--- condition: {condition} ---")
     return answer_questions(model, tok, q, aliases)
 
+def keep_mask(df: pd.DataFrame, conditions: list[str] = KEEP_CONDITIONS, suffix: str = "") -> pd.Series:
+    return df[f"full_contains{suffix}"] & ~df[[f"{c}_contains{suffix}" for c in conditions]].any(axis=1)
+
 def build_filter(full: pd.DataFrame, runs: dict[str, pd.DataFrame]) -> pd.DataFrame:
     all_runs = {"full": full, **runs}
     df = pd.DataFrame({f"{name}_contains": r["contains_alias"] for name, r in all_runs.items()})
-    df["keep"] = df["full_contains"] & ~df[[f"{c}_contains" for c in CONDITIONS]].any(axis=1)
+    df["keep"] = keep_mask(df)
     for name, r in all_runs.items():
         df[f"{name}_contains_strict"] = r["contains"]
     for name, r in all_runs.items():
@@ -59,8 +65,8 @@ def print_summary(df: pd.DataFrame) -> None:
     print(f"\nof {len(full_ok)} answered correctly with the full context, also correct with:")
     for c in CONDITIONS:
         print(f"{c:>7}: {full_ok[f'{c}_contains'].sum()}")
-    strict = df["full_contains_strict"] & ~df[[f"{c}_contains_strict" for c in CONDITIONS]].any(axis=1)
-    print(f"\nkept (contains_alias): {df['keep'].sum()}/{n} | kept if scored with contains: {strict.sum()}/{n}")
+    print(f"\nkept (full correct, {' and '.join(KEEP_CONDITIONS)} wrong): {df['keep'].sum()}/{n} | scored with contains: {keep_mask(df, suffix='_strict').sum()}/{n}")
+    print(f"kept questions that b_only also answers: {df.loc[df['keep'], 'b_only_contains'].sum()} | kept if b_only were filtered on too: {keep_mask(df, CONDITIONS).sum()}")
     if df["keep"].sum() < MIN_KEEP:
         print(f"WARNING: fewer than {MIN_KEEP} questions remain; tell the team")
 
@@ -69,7 +75,16 @@ def main() -> None:
     parser.add_argument("--device", default=None)
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--out", type=Path, default=None)
+    parser.add_argument("--rebuild", action="store_true")
     args = parser.parse_args()
+    if args.rebuild:
+        out = (args.out or FILTER_PATH).resolve()
+        df = pd.read_parquet(out)
+        df["keep"] = keep_mask(df)
+        df.to_parquet(out)
+        print(f"rebuilt keep in {out}")
+        print_summary(df)
+        return
     ids = pd.read_parquet(CLEAN_PATH).index.unique()[: args.limit]
     full = pd.read_parquet(FULL_PATH).loc[ids]
     if not full["model"].eq(MODEL_NAME).all():

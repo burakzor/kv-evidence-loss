@@ -54,6 +54,24 @@ Some HotpotQA gold answers are more specific than the question asks for. The que
 
 Other names, synonyms, abbreviations that aren't in the gold, partial lists and vaguer answers are never accepted. The rules were written after a manual check of the baseline showed correct short answers failing `contains`. On the 20 hand-checked baseline answers, `contains_alias` agreed with the human verdict 20 times and `contains` 18 times.
 
+## model filter
+
+`data/hotpotqa/filter_qwen3_8b.parquet` marks the questions that Qwen3-8B answers only with the full context. `scripts/model_filter.py` asks every question again with only paragraph A, only paragraph B, and no paragraph, using the same prompt template, generation and scoring as the baseline; the full-context results are read from `answers/full_1.0.parquet`. It has one row per question, indexed by `id`, with these columns:
+
+- `full_contains`, `a_only_contains`, `b_only_contains`, `no_ctx_contains`: `contains_alias` of the answer in each condition
+- `keep`: the full-context answer is correct, and the A-only and no-paragraph answers are not. RQ2 runs on these questions.
+- `*_contains_strict`: the same with `contains`
+- `*_answer`: the model's answer in each condition
+
+| condition | correct (`contains_alias`) |
+|---|---|
+| full context | 131 / 169 |
+| A only | 18 / 169 |
+| B only | 156 / 169 |
+| no paragraph | 11 / 169 |
+
+111 questions are kept (106 with `contains`). B only is recorded but not used in `keep`: with B as the only paragraph the model takes the one answer-shaped span and does not need A, so it answers more questions than with the full context, and filtering on it would leave 5 questions. The labeling already removed questions whose wording names B's entity. Rerunning with `--rebuild` recomputes `keep` from the saved columns without the model. The environment of the run is in `data/hotpotqa/filter_qwen3_8b_env.txt`.
+
 ## kept tokens
 
 For every compressed run there is one mask per question in `raw/kept/{method}/{budget}/{id}.npz`. It holds a single boolean array `kept` of shape `(n_layers, n_kv_heads, n_tokens)`. `kept[l, h, t]` is True if prompt token `t` was still in the cache of layer `l` and KV head `h` once the prompt had been processed. `n_tokens` is the prompt length and always equals `prompt_tokens` in the answers file. ICR and QRHead drop whole paragraphs rather than single tokens, so their masks are True for every token of a kept paragraph in all layers and heads.
