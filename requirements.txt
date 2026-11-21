@@ -8,3 +8,4 @@ numpy==2.4.6
 pyarrow==23.0.1
 tqdm==4.67.3
 torch
+standard-pipes==3.13.0
