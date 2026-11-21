@@ -13,6 +13,7 @@ results/
   raw/kept/{method}/{budget}/
     {id}.npz                         kept-token mask of one question
   retention.parquet                  share of each A/B sentence that was kept
+  retention_by_layer.parquet         the same share for every layer separately
 ```
 
 `raw/` is too large for git and is kept on the team's Google Drive. Everything else is committed.
@@ -76,3 +77,7 @@ The masks are written with `np.savez_compressed(path, kept=kept)`.
 ## retention
 
 `retention.parquet` does the calculation above for every question, method, budget and A/B sentence. It is produced by `scripts/retention.py` and has the columns `id`, `method`, `budget`, `title` and `sent_id` (which sentence, as in the token spans file), `sentence_tag` (A or B) and `kept_fraction`, the share of the sentence's tokens that were kept, averaged over all layers and KV heads. Comparing A with B, and both with `random`, answers RQ1: which supporting sentence a compression method keeps.
+
+`retention_by_layer.parquet` comes from the same run and has the same columns plus `layer` (0 to 35 for Qwen3-8B), with one row per sentence and layer. Its `kept_fraction` is averaged over the KV heads of that layer only, so it shows in which layers a sentence was dropped. For a method that keeps the same tokens in every layer, such as `streamingllm`, all layers give the same value.
+
+`scripts/retention.py` reads the masks in `raw/kept/`. To read them from somewhere else, for example from Google Drive, change `kept_dir` at the top of the main block. Masks whose `n_tokens` differs from the token spans of their question are skipped and listed at the end.
