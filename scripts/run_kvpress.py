@@ -63,7 +63,9 @@ RANDOM_SEED = 0
 # All settings are kvpress defaults, written out so that the config file records them.
 # AdaKV was dropped by the team; DuoAttention is waiting for a team decision.
 METHODS = {
-    "full": {"press": None, "attn": "sdpa", "kind": None},
+    # No compression, through this runner's prefill/decode path (the budget-1.0 check run). Not called "full":
+    # its output would be full_1.0.parquet and overwrite the baseline it is compared against.
+    "nopress": {"press": None, "attn": "sdpa", "kind": None},
     "snapkv": {"press": lambda r: SnapKVPress(compression_ratio=r, window_size=64, kernel_size=5), "attn": "sdpa", "kind": "scorer"},
     "streamingllm": {"press": lambda r: StreamingLLMPress(compression_ratio=r, n_sink=4), "attn": "sdpa", "kind": "scorer"},
     "random": {"press": lambda r: RandomPress(compression_ratio=r, seed=RANDOM_SEED), "attn": "sdpa", "kind": "scorer"},
@@ -303,8 +305,8 @@ def main() -> None:
 
     if not 0 < args.budget <= 1:
         parser.error("--budget must be in (0, 1]")
-    if args.method == "full" and args.budget != 1.0:
-        parser.error("--method full only makes sense with --budget 1.0")
+    if args.method == "nopress" and args.budget != 1.0:
+        parser.error("--method nopress only makes sense with --budget 1.0")
     spec = METHODS[args.method]
 
     ids = pd.read_parquet(CLEAN_PATH).index.unique()[: args.limit]

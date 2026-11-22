@@ -9,7 +9,7 @@ pip install -q kvpress==0.5.5 transformers==5.2.0 pandas==2.2.3   # same pins as
 python scripts/run_kvpress.py --method snapkv --budget 0.1 --limit 1   # test: first question only
 python scripts/run_kvpress.py --method snapkv --budget 0.1             # all 169
 ```
-Methods: `full` (budget 1.0), `snapkv`, `streamingllm`, `random`, `observed_attention`. AdaKV was dropped by the team. Budget = share of prompt tokens kept.
+Methods: `nopress` (budget 1.0, no compression; not named `full` so it cannot overwrite the baseline's `full_1.0.parquet`), `snapkv`, `streamingllm`, `random`, `observed_attention`. AdaKV was dropped by the team. Budget = share of prompt tokens kept.
 
 Outputs: `results/answers/{method}_{budget}.parquet` (`_limitN` suffix for test runs), a `_config.json` with settings and versions, and `results/raw/kept/{method}/{budget}/{id}.npz` with `kept`, bool `(36 layers, 8 KV heads, prompt_tokens)`. Extra columns: `n_kept`, `kept_fraction`, `kv_cache_mb`, `prefill_s`, `decode_s_per_token`, `peak_mem_gb`.
 
@@ -28,7 +28,7 @@ Outputs: `results/answers/{method}_{budget}.parquet` (`_limitN` suffix for test 
 
 ## Checks before the full runs
 1. `--limit 1 --inspect-layer 15`: runs end to end and prints kept tokens and A/B survival.
-2. `--method full --budget 1.0`: answers equal `full_1.0.parquet` (same L4 and pins as the baseline).
+2. `--method nopress --budget 1.0`: answers equal `full_1.0.parquet` (same L4 and pins as the baseline).
 3. `--method random --budget 0.1`: mean `kept_fraction` ≈ 0.1.
 4. `observed_attention` on the longest prompt (2,683 tokens) fits in the L4's 24 GB.
 
