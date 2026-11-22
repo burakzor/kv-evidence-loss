@@ -12,6 +12,7 @@ results/
     {method}_{budget}_check.csv      20 answers whose scores were checked by hand
   raw/kept/{method}/{budget}/
     {id}.npz                         kept-token mask of one question
+  icr_scores.parquet                 ICR score and rank of every paragraph
   retention.parquet                  share of each A/B sentence that was kept
   retention_by_layer.parquet         the same share for every layer separately
 ```
@@ -91,6 +92,25 @@ print(kept[:, :, b["tok_start"] : b["tok_end"] + 1].mean())
 ```
 
 The masks are written with `np.savez_compressed(path, kept=kept)`.
+
+## icr
+
+ICR (Chen et al., ICLR 2025; github.com/OSU-NLP-Group/In-Context-Reranking) ranks the 10 paragraphs by the model's own attention and keeps the top ones, so it shortens the prompt instead of compressing the cache. `scripts/icr.py` follows the repository's default scoring (`masked_NA_calibration`): the attention from every token of the query span, averaged over those tokens and summed over all layers and heads, is computed once with the real question and once with the content-free question `N/A`. For each paragraph, the per-token difference (query minus `N/A`) is the calibrated score; tokens below its mean minus two standard deviations are dropped and the rest are summed. Unlike the original, the scoring prompt is our own prompt from `scripts/prompts.py`, the same one the model answers from, so the token positions match the spans file. The query span runs from `Question:` to the end of the chat template, as in the QRHead code, and attention is recorded with sdpa in bfloat16 (`scripts/attention_recorder.py`).
+
+Budget rule: the target is `budget × prompt_tokens`. Paragraphs are taken in ICR rank order, and the next one is added only if it brings the kept paragraph tokens closer to the target, with at least one kept. The kept paragraphs stay in their original order in the shortened prompt. ICR runs at 0.2 and 0.1 only: at 0.05 the target (about 69 tokens for a median prompt) is half a paragraph. The instruction, question and template are always kept, so the effective kept share (`kept_fraction`) is a little above the budget.
+
+`answers/icr_{budget}.parquet` has the usual columns, with `prompt_tokens` the length of the original prompt, plus:
+
+- `short_prompt_tokens`: length of the shortened prompt the answer was generated from
+- `n_paragraphs_kept`, `kept_titles`: the kept paragraphs, in prompt order
+- `target_tokens`, `paragraph_tokens_kept`: the budget target and the paragraph tokens actually kept
+- `a_kept`, `b_kept`: whether paragraph A and paragraph B were kept, the paragraph-level answer to RQ1
+- `kept_fraction`: mean of the mask
+- `rank_s`, `generate_s`: seconds for the two scoring passes and for answering from the shortened prompt; `peak_mem_gb` covers both
+
+The ranking does not depend on the budget, so it is computed once per question and saved in `icr_scores.parquet`: one row per question and paragraph, indexed by `id`, with `title`, `score`, `rank` (1 is best), `tok_start`, `tok_end` (the paragraph's tokens in the original prompt, inclusive), `is_a` and `is_b`.
+
+The masks in `raw/kept/icr/{budget}/` are False for every token of a dropped paragraph and True everywhere else, in all layers and KV heads. A token shared by a dropped and a kept paragraph at their boundary counts as kept. With `--budgets 1.0`, all 10 paragraphs are kept and the answers equal `answers/full_1.0.parquet`. That check is run before the full run.
 
 ## retention
 
