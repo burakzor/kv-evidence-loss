@@ -1,8 +1,8 @@
 # kvpress output formats
 
-Files written by `scripts/run_kvpress.py`. The methods, the budget rule and how kept tokens are recorded are described in `docs/runner_notes.md`. Runs with `--limit N` write the answers and config files with a `_limitN` suffix; their masks currently go to the same folder as full runs.
+Files written by `scripts/run_kvpress.py`. The methods, the budget rule and how kept tokens are recorded are described in `docs/runner_notes.md`. Runs with `--limit N` write the same files with a `_limitN` suffix, and their masks go to `results/raw/kept_limitN/`, so `scripts/retention.py` never reads them.
 
-Methods: `snapkv`, `streamingllm`, `random`, `observed_attention`, and `nopress` (no compression, budget `1.0` only, the check run). Budgets: `0.2`, `0.1`, `0.05`.
+Methods: `snapkv`, `streamingllm`, `random`, `h2o` (kvpress's `ObservedAttentionPress`, the closest counterpart of H2O), and `nopress` (no compression, budget `1.0` only, the check run; it writes no masks). Budgets: `0.2`, `0.1`, `0.05`.
 
 ## `results/answers/{method}_{budget}.parquet`
 
@@ -41,8 +41,8 @@ The press scores prompt tokens separately in every layer and KV head and keeps e
 
 ## `results/raw/kept/{method}/{budget}/{id}.npz`
 
-One file per question, written with `np.savez_compressed(path, kept=kept)`. It holds a single bool array `kept` of shape `(36 layers, 8 KV heads, prompt_tokens)`. `True` means that prompt position is still in that layer's and head's cache after prefill. Every layer and head has exactly `n_kept` `True` values, and they usually differ between layers and heads. The last position (the held-back chat template token) is always `True`. For `nopress` the whole array is `True`. Positions are the same as in `data/hotpotqa/hotpot_token_spans_qwen3_8b.parquet` (the runner checks this for every question), so `scripts/retention.py` reads these masks directly. Unlike ICR, an A or B sentence can be partly kept, and its kept fraction can differ by layer and head.
+One file per question, written with `np.savez_compressed(path, kept=kept)`. It holds a single bool array `kept` of shape `(36 layers, 8 KV heads, prompt_tokens)`. `True` means that prompt position is still in that layer's and head's cache after prefill. Every layer and head has exactly `n_kept` `True` values, and they usually differ between layers and heads. The last position (the held-back chat template token) is always `True`. Positions are the same as in `data/hotpotqa/hotpot_token_spans_qwen3_8b.parquet` (the runner checks this for every question), so `scripts/retention.py` reads these masks directly. Unlike ICR, an A or B sentence can be partly kept, and its kept fraction can differ by layer and head.
 
 ## `results/answers/{method}_{budget}_config.json`
 
-The settings of the run: method, budget, the press with its settings (e.g. `SnapKVPress(compression_ratio=0.9, window_size=64, kernel_size=5)`), attention implementation (`sdpa`, or `eager` for `observed_attention`), the per-question compression-ratio rule, the held-back last token, `max_new_tokens`, number of questions, device, and the `kvpress`, `transformers` and `torch` versions.
+The settings of the run: method, budget, the press with its settings (e.g. `SnapKVPress(compression_ratio=0.9, window_size=64, kernel_size=5)`), attention implementation (`sdpa`, or `eager` for `h2o`), the per-question compression-ratio rule, the held-back last token, `max_new_tokens`, number of questions, device, and the `kvpress`, `transformers` and `torch` versions.

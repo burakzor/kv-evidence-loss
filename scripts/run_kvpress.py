@@ -1,6 +1,6 @@
 """Answer the 169 HotpotQA questions with a compressed KV cache and record which tokens were kept.
 
-Usage (Colab L4, after: pip install kvpress==0.5.5 transformers==5.2.0 pandas==2.2.3):
+Usage (Colab L4, after: pip install -r requirements.txt, which pins kvpress, transformers and pandas):
     python scripts/run_kvpress.py --method snapkv --budget 0.1 --limit 1   # one question, end to end
     python scripts/run_kvpress.py --method snapkv --budget 0.1             # all 169 questions
 
@@ -51,7 +51,7 @@ DATA_DIR = ROOT / "data" / "hotpotqa"
 CLEAN_PATH = DATA_DIR / "hotpot_bridge_ab_clean.parquet"
 SPANS_PATH = DATA_DIR / "hotpot_token_spans_qwen3_8b.parquet"
 ANSWERS_DIR = ROOT / "results" / "answers"
-KEPT_DIR = ROOT / "results" / "raw" / "kept"
+RAW_DIR = ROOT / "results" / "raw"  # masks go to raw/kept/ (real runs) or raw/kept_limitN/ (test runs), see main()
 
 RANDOM_SEED = 0
 
@@ -69,8 +69,9 @@ METHODS = {
     "snapkv": {"press": lambda r: SnapKVPress(compression_ratio=r, window_size=64, kernel_size=5), "attn": "sdpa", "kind": "scorer"},
     "streamingllm": {"press": lambda r: StreamingLLMPress(compression_ratio=r, n_sink=4), "attn": "sdpa", "kind": "scorer"},
     "random": {"press": lambda r: RandomPress(compression_ratio=r, seed=RANDOM_SEED), "attn": "sdpa", "kind": "scorer"},
-    # Closest kvpress counterpart of H2O, not H2O itself; needs the attention weights, hence eager.
-    "observed_attention": {"press": lambda r: ObservedAttentionPress(compression_ratio=r), "attn": "eager", "kind": "scorer"},
+    # Named "h2o" as in results/README.md, but it is ObservedAttentionPress: the closest kvpress counterpart
+    # of H2O, not H2O itself (notes, decision 5). It needs the attention weights, hence eager.
+    "h2o": {"press": lambda r: ObservedAttentionPress(compression_ratio=r), "attn": "eager", "kind": "scorer"},
 }
 
 
@@ -325,8 +326,13 @@ def main() -> None:
         attach_scorer_recorder(press, store)
 
     name = f"{args.method}_{budget_name(args.budget)}" + (f"_limit{args.limit}" if args.limit else "")
-    kept_dir = KEPT_DIR / args.method / budget_name(args.budget)
-    kept_dir.mkdir(parents=True, exist_ok=True)
+    # scripts/retention.py reads every mask under raw/kept/, so test runs write theirs to raw/kept_limitN/
+    # (as scripts/icr.py does). The nopress check run saves no masks: they would all be True, and
+    # retention.py would list "nopress" as if it were a method.
+    save_masks = spec["press"] is not None
+    kept_dir = RAW_DIR / (f"kept_limit{args.limit}" if args.limit else "kept") / args.method / budget_name(args.budget)
+    if save_masks:
+        kept_dir.mkdir(parents=True, exist_ok=True)
 
     rows = []
     for i, (qid, q) in enumerate(tqdm(questions.iterrows(), total=len(questions))):
@@ -338,7 +344,8 @@ def main() -> None:
 
         result = answer_one(model, tok, input_ids, press, spec["kind"], store, stop_ids, MAX_NEW_TOKENS)
         kept = result.pop("kept")
-        np.savez_compressed(kept_dir / f"{qid}.npz", kept=kept)
+        if save_masks:
+            np.savez_compressed(kept_dir / f"{qid}.npz", kept=kept)
         if i == 0 and args.inspect_layer is not None:
             inspect_kept(qid, input_ids[0].tolist(), kept, args.inspect_layer, tok, spans)
 
@@ -364,7 +371,7 @@ def main() -> None:
     }
     (ANSWERS_DIR / f"{name}_config.json").write_text(json.dumps(config, indent=2))
 
-    print(f"saved {out} and {len(df)} kept masks in {kept_dir}")
+    print(f"saved {out}" + (f" and {len(df)} kept masks in {kept_dir}" if save_masks else " (no masks for nopress)"))
     print_summary(df)
     print(f"mean kept fraction: {df['kept_fraction'].mean():.4f} (budget {args.budget}) | mean KV cache: {df['kv_cache_mb'].mean():.1f} MB")
     print(f"mean prefill: {df['prefill_s'].mean():.3f} s | mean decode: {1000 * df['decode_s_per_token'].mean():.1f} ms/token | max peak memory: {df['peak_mem_gb'].max():.2f} GB")
