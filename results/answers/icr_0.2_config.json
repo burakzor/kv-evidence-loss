@@ -1,0 +1,18 @@
+{
+  "method": "icr",
+  "model": "Qwen/Qwen3-8B",
+  "attn_implementation": "recorder",
+  "scoring": "ICR masked_NA_calibration: query-averaged attention from the query span, summed over all layers and heads; per paragraph, calibrated = query - null query, tokens below mean - 2 std of calibrated dropped, score = sum of the rest",
+  "query_span": "from 'Question:' to the end of the prompt, chat template suffix included",
+  "null_query": "N/A",
+  "budget_rule": "target = budget * prompt_tokens; paragraphs in ICR rank order, the next one added while it brings the kept paragraph tokens closer to the target; at least one; kept paragraphs in their original order",
+  "mask": "True everywhere except the tokens of dropped paragraphs, in all layers and KV heads",
+  "max_new_tokens": 64,
+  "n_questions": 169,
+  "device": "NVIDIA L4",
+  "versions": {
+    "transformers": "5.2.0",
+    "torch": "2.14.1+cu130"
+  },
+  "budget": 0.2
+}
