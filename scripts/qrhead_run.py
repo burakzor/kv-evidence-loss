@@ -1,6 +1,8 @@
 # Scoring adapted from github.com/princeton-pli/QRHead at commit 7a668e7 (MIT License, Copyright (c) 2025 Princeton Language and Intelligence)
 from __future__ import annotations
+from importlib.metadata import version
 from pathlib import Path
+import json
 import time
 import numpy as np
 import pandas as pd
@@ -8,7 +10,7 @@ import torch
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer, DynamicCache, PreTrainedModel, PreTrainedTokenizerBase
 import attention_recorder
-from generation import generate_answer, get_device
+from generation import MAX_NEW_TOKENS, generate_answer, get_device
 from paragraph_budget import select_paragraphs
 from prompts import build_prompt, load_questions
 from qrhead_detect import NULL_QUERY, compose_scoring_prompt, score_per_token_attention_to_query
@@ -102,9 +104,9 @@ def print_budget_summary(df: pd.DataFrame) -> None:
     print()
     print("budget:", df["budget"].iat[0], "| questions:", len(df), "| device:", df["device"].iat[0])
     print("contains_alias:", df["contains_alias"].sum(), "/", len(df), round(df["contains_alias"].mean(), 3))
-    print("paragraphs kept:", round(df["n_paragraphs_kept"].mean(), 2), "| kept fraction:", round(df["kept_fraction_actual"].mean(), 3))
+    print("paragraphs kept:", round(df["n_paragraphs_kept"].mean(), 2), "| prompt kept fraction:", round(df["prompt_kept_fraction"].mean(), 3))
     print("A kept:", round(df["a_kept"].mean(), 3), "| B kept:", round(df["b_kept"].mean(), 3), "| both kept:", round(both_kept.mean(), 3))
-    print("rank_s:", round(df["rank_s"].mean(), 3), "| gen_s:", round(df["gen_s"].mean(), 3), "| peak_mem_gb:", round(df["peak_mem_gb"].max(), 2))
+    print("rank_s:", round(df["rank_s"].mean(), 3), "| generate_s:", round(df["generate_s"].mean(), 3), "| peak_mem_gb:", round(df["peak_mem_gb"].max(), 2))
 
 def run(model_name: str, heads_path: Path, n_questions: int, answers_dir: Path, kept_dir: Path) -> dict[float, pd.DataFrame]:
     """Return the answers table of every budget, and write the tables and the kept masks."""
@@ -153,7 +155,7 @@ def run(model_name: str, heads_path: Path, n_questions: int, answers_dir: Path, 
             t0 = time.perf_counter()
             gen = generate_answer(model, tok, prompt)
             sync(device)
-            gen_s = time.perf_counter() - t0
+            generate_s = time.perf_counter() - t0
             if device.type == "cuda":
                 peak_mem_gb = torch.cuda.max_memory_allocated(device) / 1024**3
             else:
@@ -178,11 +180,11 @@ def run(model_name: str, heads_path: Path, n_questions: int, answers_dir: Path, 
                 "prefill_s": float("nan"),
                 "decode_s_per_token": float("nan"),
                 "rank_s": rank_s,
-                "gen_s": gen_s,
+                "generate_s": generate_s,
                 "kept_titles": kept_titles,
                 "n_paragraphs_kept": len(kept_titles),
-                "kept_fraction_actual": kept[0, 0].mean(),
-                "kept_prompt_tokens": gen.prompt_tokens,
+                "prompt_kept_fraction": float(kept.mean()),
+                "short_prompt_tokens": gen.prompt_tokens,
                 "a_kept": ab_df.loc[qid, "A"] in kept_titles,
                 "b_kept": ab_df.loc[qid, "B"] in kept_titles,
             })
@@ -196,6 +198,13 @@ def run(model_name: str, heads_path: Path, n_questions: int, answers_dir: Path, 
         df.insert(2, "model", model_name)
         df.insert(3, "device", device_name(model))
         df.to_parquet(answers_dir / f"qrhead_{budget}.parquet")
+        config = {
+            "method": "qrhead", "budget": budget, "model": model_name, "heads": attn_head_set, "heads_file": heads_path.name,
+            "null_query": NULL_QUERY, "selection": "paragraph_budget.select_paragraphs, kept paragraphs in prompt order",
+            "attn_implementation": attention_recorder.ATTN_NAME, "max_new_tokens": MAX_NEW_TOKENS, "n_questions": len(df),
+            "device": device_name(model), "versions": {p: version(p) for p in ("transformers", "torch")},
+        }
+        (answers_dir / f"qrhead_{budget}_config.json").write_text(json.dumps(config, indent=2))
         dfs[budget] = df
         print_budget_summary(df)
     print()
