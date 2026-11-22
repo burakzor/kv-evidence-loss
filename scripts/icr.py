@@ -88,7 +88,7 @@ def budget_name(budget: float) -> str:
 def print_icr_summary(df: pd.DataFrame, keep: pd.Series | None) -> None:
     print_summary(df)
     print(f"paragraphs kept: mean {df['n_paragraphs_kept'].mean():.2f} | {df['n_paragraphs_kept'].value_counts().sort_index().to_dict()}")
-    print(f"mean kept fraction: {df['kept_fraction'].mean():.4f} (budget {df['budget'].iat[0]}) | paragraph tokens / target: {(df['paragraph_tokens_kept'] / df['target_tokens']).mean():.3f}")
+    print(f"mean prompt kept fraction: {df['prompt_kept_fraction'].mean():.4f} (budget {df['budget'].iat[0]}) | paragraph tokens / target: {(df['paragraph_tokens_kept'] / df['target_tokens']).mean():.3f}")
     both = df["a_kept"] & df["b_kept"]
     print(f"A kept: {df['a_kept'].mean():.3f} | B kept: {df['b_kept'].mean():.3f} | both: {both.mean():.3f}")
     if keep is not None:
@@ -167,7 +167,7 @@ def main() -> None:
                 "prompt_tokens": n_tokens, "new_tokens": gen.new_tokens, "truncated": gen.truncated,
                 "short_prompt_tokens": gen.prompt_tokens, "n_paragraphs_kept": len(kept_titles), "kept_titles": short_context["title"],
                 "target_tokens": target, "paragraph_tokens_kept": sum(doc_spans[t][1] - doc_spans[t][0] + 1 for t in kept_titles),
-                "a_kept": a_title in kept_titles, "b_kept": b_title in kept_titles, "kept_fraction": float(kept.mean()),
+                "a_kept": a_title in kept_titles, "b_kept": b_title in kept_titles, "prompt_kept_fraction": float(kept.mean()),
                 "rank_s": rank_s, "generate_s": generate_s, "peak_mem_gb": peak,
             })
 

@@ -35,7 +35,7 @@ These columns are added by ICR:
 | `paragraph_tokens_kept` | int | total tokens of the kept paragraphs |
 | `a_kept` | bool | paragraph A was kept |
 | `b_kept` | bool | paragraph B was kept |
-| `kept_fraction` | float | mean of the mask, i.e. the share of the original prompt that was kept, instruction, question and template included |
+| `prompt_kept_fraction` | float | mean of the mask, i.e. the share of the original prompt that was kept, instruction, question and template included |
 | `rank_s` | float | seconds for the two scoring passes (question and `N/A`) |
 | `generate_s` | float | seconds for answering from the shortened prompt |
 | `peak_mem_gb` | float | peak GPU memory over scoring and answering; NaN off CUDA |
