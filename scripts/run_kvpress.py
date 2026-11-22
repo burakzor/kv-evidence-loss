@@ -59,9 +59,9 @@ RANDOM_SEED = 0
 # the attention implementation it needs, and how its kept tokens are recorded:
 #   "scorer": the press prunes the cache with scores.topk(...)  -> record the topk indices;
 #   "mask":   the press keeps the cache and masks evicted keys  -> read module.masked_key_indices
-#             (no method uses this now; kept for DuoAttention, see "Open" in the notes).
+#             (for HeadKV's masking press, which runs through this runner).
 # All settings are kvpress defaults, written out so that the config file records them.
-# AdaKV was dropped by the team; DuoAttention is waiting for a team decision.
+# DuoAttention and AdaKV are not used.
 METHODS = {
     # No compression, through this runner's prefill/decode path (the budget-1.0 check run). Not called "full":
     # its output would be full_1.0.parquet and overwrite the baseline it is compared against.
@@ -112,6 +112,8 @@ def attach_scorer_recorder(press: ScorerPress, store: dict[int, torch.Tensor]) -
 
     kvpress calls press.compress(...) once per layer, right after the layer's attention during prefill. The
     function below is ScorerPress.compress from kvpress 0.5.5 line by line, plus the two lines marked RECORD.
+    The recorded masks stay on the GPU: a copy to the CPU here would make the GPU wait once per layer and add
+    that time to prefill_s. answer_one moves them to the CPU after the timed part.
     """
     if type(press).compress is not ScorerPress.compress:
         # This press has its own compress(); the copy below would not be the code that normally runs.
@@ -120,12 +122,12 @@ def attach_scorer_recorder(press: ScorerPress, store: dict[int, torch.Tensor]) -
     def compress(module, hidden_states, keys, values, attentions, kwargs):
         k_len = keys.shape[2]
         if press.compression_ratio == 0:
-            store[module.layer_idx] = torch.ones(keys.shape[1], k_len, dtype=torch.bool)  # RECORD: everything kept
+            store[module.layer_idx] = torch.ones(keys.shape[1], k_len, dtype=torch.bool, device=keys.device)  # RECORD: everything kept
             return keys, values
         scores = press.score(module, hidden_states, keys, values, attentions, kwargs)  # (batch, n_kv_heads, k_len)
         n_kept = compute_n_kept(k_len, press.compression_ratio)
         indices = scores.topk(n_kept, dim=-1).indices  # the positions that stay in the cache
-        store[module.layer_idx] = torch.zeros_like(scores, dtype=torch.bool).scatter_(-1, indices, True)[0].cpu()  # RECORD
+        store[module.layer_idx] = torch.zeros_like(scores, dtype=torch.bool).scatter_(-1, indices, True)[0]  # RECORD (on the GPU)
         indices = indices.unsqueeze(-1).expand(-1, -1, -1, module.head_dim)
         keys = keys.gather(2, indices).contiguous()
         values = values.gather(2, indices).contiguous()
@@ -137,20 +139,21 @@ def attach_scorer_recorder(press: ScorerPress, store: dict[int, torch.Tensor]) -
 
 
 def read_masked_kept(model: PreTrainedModel, n_kv_heads: int, k_len: int) -> list[torch.Tensor]:
-    """Kept positions of a masking press (e.g. DuoAttention; none is in METHODS now), per layer, as (n_kv_heads, k_len) bool tensors.
+    """Kept positions of a masking press (HeadKV), per layer, as (n_kv_heads, k_len) bool tensors on the model's device.
 
-    The cache is not pruned: kvpress stores the evicted positions in module.masked_key_indices as
+    The cache is not pruned. kvpress stores the evicted positions in module.masked_key_indices as
     (batch_idx, head_idx, position) and hides those keys at decoding time (kvpress/attention_patch.py).
-    It resets the attribute to None at the start of each prefill, so stale masks from an earlier question
-    cannot leak in; None after prefill means nothing was evicted.
+    It resets the attribute to None at the start of each prefill and leaves it unchanged during decoding.
+    So it can be read after decoding (outside the timed part), stale masks from an earlier question cannot
+    leak in, and None means nothing was evicted.
     """
     kept = []
     for layer in model.model.layers:
-        mask = torch.ones(n_kv_heads, k_len, dtype=torch.bool)
+        mask = torch.ones(n_kv_heads, k_len, dtype=torch.bool, device=model.device)
         masked = getattr(layer.self_attn, "masked_key_indices", None)
         if masked is not None:
             _, heads, positions = masked
-            mask[heads.cpu(), positions.cpu()] = False
+            mask[heads, positions] = False
         kept.append(mask)
     return kept
 
@@ -234,15 +237,8 @@ def answer_one(model: PreTrainedModel, tok: PreTrainedTokenizerBase, input_ids: 
     sync(device)
     t1 = time.perf_counter()
 
-    # --- Kept mask over the whole prompt: (n_layers, n_kv_heads, n) -------------------------------------------
-    if kind == "scorer":
-        per_layer = [store[i] for i in range(n_layers)]
-    elif kind == "mask":
-        per_layer = read_masked_kept(model, n_kv_heads, n - 1)
-    else:  # no press: everything kept
-        per_layer = [torch.ones(n_kv_heads, n - 1, dtype=torch.bool)] * n_layers
-    kept = torch.stack(per_layer).numpy()
-    kept = np.concatenate([kept, np.ones((n_layers, n_kv_heads, 1), dtype=bool)], axis=2)  # held-back token: kept
+    # Size of the compressed cache, read now because decoding adds the answer tokens to it. .nbytes only reads
+    # the tensors' shapes, so this adds no GPU work between prefill and decoding.
     kv_cache_bytes = sum(layer.keys.nbytes + layer.values.nbytes for layer in cache.layers)
 
     # --- Decode, press inactive: greedy, from the compressed cache ---------------------------------------------
@@ -262,6 +258,16 @@ def answer_one(model: PreTrainedModel, tok: PreTrainedTokenizerBase, input_ids: 
     t2 = time.perf_counter()
     peak = torch.cuda.max_memory_allocated(device) / 1024**3 if device.type == "cuda" else float("nan")
 
+    # --- Kept mask over the whole prompt: (n_layers, n_kv_heads, n), built after the timed part ---------------
+    if kind == "scorer":
+        per_layer = [store[i] for i in range(n_layers)]
+    elif kind == "mask":
+        per_layer = read_masked_kept(model, n_kv_heads, n - 1)
+    else:  # no press: everything kept
+        per_layer = [torch.ones(n_kv_heads, n - 1, dtype=torch.bool)] * n_layers
+    kept = torch.stack(per_layer).cpu().numpy()
+    kept = np.concatenate([kept, np.ones((n_layers, n_kv_heads, 1), dtype=bool)], axis=2)  # held-back token: kept
+
     # Same post-processing as generation.generate_answer: drop the stop token, decode, strip.
     stopped = bool(new) and new[-1] in stop_ids
     answer_ids = new[:-1] if stopped else new
@@ -271,7 +277,7 @@ def answer_one(model: PreTrainedModel, tok: PreTrainedTokenizerBase, input_ids: 
         "new_tokens": len(answer_ids),
         "truncated": not stopped,
         "n_kept": int(kept.sum(axis=2).mean()),  # per head (mean over layers and heads)
-        "kept_fraction": float(kept.mean()),
+        "prompt_kept_fraction": float(kept.mean()),  # share of the whole prompt kept (retention.parquet's kept_fraction is per sentence)
         "kv_cache_mb": kv_cache_bytes / 1024**2,
         "prefill_s": t1 - t0,
         "decode_s_per_token": (t2 - t1) / len(new),  # decoding forward passes, stop token included
@@ -300,6 +306,7 @@ def main() -> None:
     parser.add_argument("--method", required=True, choices=list(METHODS))
     parser.add_argument("--budget", type=float, required=True, help="share of the prompt's tokens kept, e.g. 0.2, 0.1, 0.05; 1.0 = nothing removed")
     parser.add_argument("--limit", type=int, default=None, help="only the first N questions (for testing); the answers file gets a _limitN suffix")
+    parser.add_argument("--ids", nargs="+", default=None, help="only these question ids (for testing); the answers file gets an _ids suffix")
     parser.add_argument("--device", default=None)
     parser.add_argument("--inspect-layer", type=int, default=None, help="print the kept tokens of the first question in this layer")
     args = parser.parse_args()
@@ -308,9 +315,17 @@ def main() -> None:
         parser.error("--budget must be in (0, 1]")
     if args.method == "nopress" and args.budget != 1.0:
         parser.error("--method nopress only makes sense with --budget 1.0")
+    if args.limit and args.ids:
+        parser.error("use either --limit or --ids, not both")
     spec = METHODS[args.method]
 
-    ids = pd.read_parquet(CLEAN_PATH).index.unique()[: args.limit]
+    ids = pd.read_parquet(CLEAN_PATH).index.unique()
+    if args.ids:
+        unknown = set(args.ids) - set(ids)
+        if unknown:
+            parser.error(f"not in the clean question set: {sorted(unknown)}")
+        ids = ids[ids.isin(args.ids)]
+    ids = ids[: args.limit]
     questions = load_questions(ids)
     aliases = load_aliases()
     spans = load_spans()
@@ -325,12 +340,14 @@ def main() -> None:
     if spec["kind"] == "scorer":
         attach_scorer_recorder(press, store)
 
-    name = f"{args.method}_{budget_name(args.budget)}" + (f"_limit{args.limit}" if args.limit else "")
+    # Test runs get a suffix: _limitN for --limit, _ids for --ids.
+    suffix = f"_limit{args.limit}" if args.limit else "_ids" if args.ids else ""
+    name = f"{args.method}_{budget_name(args.budget)}{suffix}"
     # scripts/retention.py reads every mask under raw/kept/, so test runs write theirs to raw/kept_limitN/
-    # (as scripts/icr.py does). The nopress check run saves no masks: they would all be True, and
-    # retention.py would list "nopress" as if it were a method.
+    # (as scripts/icr.py does) or raw/kept_ids/. The nopress check run saves no masks: they would all be True,
+    # and retention.py would list "nopress" as if it were a method.
     save_masks = spec["press"] is not None
-    kept_dir = RAW_DIR / (f"kept_limit{args.limit}" if args.limit else "kept") / args.method / budget_name(args.budget)
+    kept_dir = RAW_DIR / f"kept{suffix}" / args.method / budget_name(args.budget)
     if save_masks:
         kept_dir.mkdir(parents=True, exist_ok=True)
 
@@ -339,8 +356,9 @@ def main() -> None:
         prompt = build_prompt(tok, q["context"], q["question"])
         input_ids = tok(prompt, return_tensors="pt", add_special_tokens=False)["input_ids"].to(model.device)
         check_spans(qid, input_ids[0].tolist(), tok, spans)
+        ratio = press_ratio(input_ids.shape[1], args.budget)  # 0.0 for nopress (budget 1.0)
         if press is not None:
-            press.compression_ratio = press_ratio(input_ids.shape[1], args.budget)
+            press.compression_ratio = ratio
 
         result = answer_one(model, tok, input_ids, press, spec["kind"], store, stop_ids, MAX_NEW_TOKENS)
         kept = result.pop("kept")
@@ -351,7 +369,8 @@ def main() -> None:
 
         score = score_answer(result["answer"], q["answer"], aliases.get(qid, []))
         rows.append({"id": qid, "question": q["question"], "gold": q["answer"], "answer": result.pop("answer"),
-                     "contains": score.contains, "contains_alias": score.contains_alias, "f1": score.f1, **result})
+                     "contains": score.contains, "contains_alias": score.contains_alias, "f1": score.f1, **result,
+                     "compression_ratio": ratio})
 
     # Same layout as full_1.0.parquet (results/README.md), with the extra cost and kept columns at the end.
     df = pd.DataFrame(rows).set_index("id")
@@ -364,16 +383,16 @@ def main() -> None:
     df.to_parquet(out)
 
     config = {
-        "method": args.method, "budget": args.budget, "press": press_settings, "attn_implementation": spec["attn"],
-        "compression_ratio": "set per question so that int(budget * prompt_tokens) positions per head are kept, held-back token included",
-        "held_back_last_token": True,"max_new_tokens": MAX_NEW_TOKENS, "n_questions": len(df),
+        "method": args.method, "budget": args.budget, "model": MODEL_NAME, "press": press_settings, "attn_implementation": spec["attn"],
+        "compression_ratio": "set per question so that int(budget * prompt_tokens) positions per head are kept, held-back token included (column compression_ratio)",
+        "held_back_last_token": True, "max_new_tokens": MAX_NEW_TOKENS, "n_questions": len(df),
         "device": device_name(model), "versions": {p: version(p) for p in ("kvpress", "transformers", "torch")},
     }
     (ANSWERS_DIR / f"{name}_config.json").write_text(json.dumps(config, indent=2))
 
     print(f"saved {out}" + (f" and {len(df)} kept masks in {kept_dir}" if save_masks else " (no masks for nopress)"))
     print_summary(df)
-    print(f"mean kept fraction: {df['kept_fraction'].mean():.4f} (budget {args.budget}) | mean KV cache: {df['kv_cache_mb'].mean():.1f} MB")
+    print(f"mean prompt kept fraction: {df['prompt_kept_fraction'].mean():.4f} (budget {args.budget}) | mean KV cache: {df['kv_cache_mb'].mean():.1f} MB")
     print(f"mean prefill: {df['prefill_s'].mean():.3f} s | mean decode: {1000 * df['decode_s_per_token'].mean():.1f} ms/token | max peak memory: {df['peak_mem_gb'].max():.2f} GB")
 
 
