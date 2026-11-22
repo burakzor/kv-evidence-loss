@@ -127,7 +127,6 @@ The scoring follows `score_docs` and `score_docs_per_head_for_detection` in the 
 
 ## Names that differ from `docs/icr_fields.md`
 
-- The share of the original prompt that was kept is `prompt_kept_fraction` in `scripts/qrhead_run.py` and `kept_fraction` in `docs/icr_fields.md`.
 - QRHead's answers tables have `prefill_s` and `decode_s_per_token` (always NaN). The ICR tables have neither.
 - ICR has `target_tokens` and `paragraph_tokens_kept`, and a per-paragraph score file, `results/icr_scores.parquet`. QRHead has none of these.
 - The config files name the paragraph rule `selection` (QRHead) and `budget_rule` (ICR). ICR's config also has `scoring`, `query_span` and `mask`, which QRHead's does not. QRHead's has `heads` and `heads_file`.
