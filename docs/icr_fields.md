@@ -29,7 +29,7 @@ These columns are added by ICR:
 | column | type | meaning |
 |---|---|---|
 | `short_prompt_tokens` | int | length of the shortened prompt the answer was generated from |
-| `n_paragraphs_kept` | int | number of kept paragraphs, 1 to 10 |
+| `n_paragraphs_kept` | int | number of kept paragraphs, from 1 to the number of paragraphs of the question |
 | `kept_titles` | list[str] | titles of the kept paragraphs, in prompt order |
 | `target_tokens` | float | `budget * prompt_tokens` |
 | `paragraph_tokens_kept` | int | total tokens of the kept paragraphs |
@@ -44,13 +44,13 @@ The rule stops at the first paragraph that would move the total away from the ta
 
 ## `results/icr_scores.parquet`
 
-One row per question and paragraph (169 × 10 rows), indexed by `id`. The ranking does not depend on the budget, so this file is written once per run.
+One row per question and paragraph, indexed by `id`: 10 rows for most questions, fewer for the few HotpotQA questions with fewer paragraphs (e.g. `5a76394c5542994ccc918725` has 5). The ranking does not depend on the budget, so this file is written once per run.
 
 | column | type | meaning |
 |---|---|---|
 | `title` | str | paragraph title |
 | `score` | float | calibrated ICR score |
-| `rank` | int | 1 is the most relevant, 10 the least |
+| `rank` | int | 1 is the most relevant |
 | `tok_start` | int | first token of the paragraph in the original prompt |
 | `tok_end` | int | last token of the paragraph, inclusive |
 | `is_a` | bool | this is paragraph A |

@@ -114,7 +114,7 @@ The masks are written with `np.savez_compressed(path, kept=kept)`.
 
 ## icr
 
-ICR (Chen et al., ICLR 2025, github.com/OSU-NLP-Group/In-Context-Reranking) ranks the 10 paragraphs by the model's own attention and keeps the top ones, so it shortens the prompt instead of compressing the cache. `scripts/icr.py` follows the repository's default scoring (`masked_NA_calibration`): the attention from every token of the query span, averaged over those tokens and summed over all layers and heads, is computed once with the real question and once with the content-free question `N/A`. For each paragraph, the per-token difference (query minus `N/A`) is the calibrated score. Tokens below its mean minus two standard deviations are dropped and the rest are summed. Unlike the original, the scoring prompt is our own prompt from `scripts/prompts.py`, the same one the model answers from, so the token positions match the spans file. The query span runs from `Question:` to the end of the chat template, as in the QRHead code, and attention is recorded with sdpa in bfloat16 (`scripts/attention_recorder.py`).
+ICR (Chen et al., ICLR 2025, github.com/OSU-NLP-Group/In-Context-Reranking) ranks the paragraphs (10 for all but a few questions) by the model's own attention and keeps the top ones, so it shortens the prompt instead of compressing the cache. `scripts/icr.py` follows the repository's default scoring (`masked_NA_calibration`): the attention from every token of the query span, averaged over those tokens and summed over all layers and heads, is computed once with the real question and once with the content-free question `N/A`. For each paragraph, the per-token difference (query minus `N/A`) is the calibrated score. Tokens below its mean minus two standard deviations are dropped and the rest are summed. Unlike the original, the scoring prompt is our own prompt from `scripts/prompts.py`, the same one the model answers from, so the token positions match the spans file. The query span runs from `Question:` to the end of the chat template, as in the QRHead code, and attention is recorded with sdpa in bfloat16 (`scripts/attention_recorder.py`).
 
 The paragraphs are taken in ICR rank order and kept with the paragraph budget rule described under answers.
 
@@ -129,7 +129,7 @@ The paragraphs are taken in ICR rank order and kept with the paragraph budget ru
 
 The ranking does not depend on the budget, so it is computed once per question and saved in `icr_scores.parquet`: one row per question and paragraph, indexed by `id`, with `title`, `score`, `rank` (1 is best), `tok_start`, `tok_end` (the paragraph's tokens in the original prompt, inclusive), `is_a` and `is_b`.
 
-The masks in `raw/kept/icr/{budget}/` are False for every token of a dropped paragraph and True everywhere else, in all layers and KV heads. A token shared by a dropped and a kept paragraph at their boundary counts as kept. With `--budgets 1.0`, all 10 paragraphs are kept and the answers equal `answers/full_1.0.parquet`. That check is run before the full run.
+The masks in `raw/kept/icr/{budget}/` are False for every token of a dropped paragraph and True everywhere else, in all layers and KV heads. A token shared by a dropped and a kept paragraph at their boundary counts as kept. With `--budgets 1.0`, every paragraph is kept and the answers equal `answers/full_1.0.parquet`. That check is run before the full run.
 
 ## retention
 
