@@ -13,7 +13,7 @@ For each question:
     5. score the answer exactly as the baseline does (scoring.score_answer);
     6. save the kept mask (.npz) and one row of the answers table, with memory and time.
 
-The choices made here (why the last token is held back, the +15 span shift, method settings, ...)
+The choices made here (why the last token is held back, the span checks, method settings, ...)
 are explained in docs/runner_notes.md; the comments below refer to them as "notes, decision N".
 """
 from __future__ import annotations
@@ -37,8 +37,8 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, DynamicCache, PreT
 if Version(version("transformers")) >= Version("5.3"):
     raise SystemExit(f'transformers {version("transformers")} is installed; kvpress 0.5.5 needs <5.3: pip install "transformers<5.3"')
 
-# Importing kvpress also patches transformers' attention functions so that masking presses (AdaKV) work.
-from kvpress import AdaKVPress, BasePress, ObservedAttentionPress, RandomPress, ScorerPress, SnapKVPress, StreamingLLMPress
+# Importing kvpress also patches transformers' attention functions so that masking presses work.
+from kvpress import BasePress, ObservedAttentionPress, RandomPress, ScorerPress, SnapKVPress, StreamingLLMPress
 from kvpress.utils import compute_n_kept
 
 # The team's shared code: same model, prompt, stop rule, generation limit and scoring as the baseline.
@@ -53,22 +53,18 @@ SPANS_PATH = DATA_DIR / "hotpot_token_spans_qwen3_8b.parquet"
 ANSWERS_DIR = ROOT / "results" / "answers"
 KEPT_DIR = ROOT / "results" / "raw" / "kept"
 
-# The spans file was built without the instruction line that prompts.py puts before the paragraphs,
-# so every span is 15 tokens later in the prompt we actually run (notes, decision 2).
-SPAN_SHIFT = 15
-
 RANDOM_SEED = 0
 
 # Methods (notes, decision 5). Each entry: how to build the press for a given compression_ratio,
 # the attention implementation it needs, and how its kept tokens are recorded:
 #   "scorer": the press prunes the cache with scores.topk(...)  -> record the topk indices;
-#   "mask":   the press keeps the cache and masks evicted keys  -> read module.masked_key_indices.
+#   "mask":   the press keeps the cache and masks evicted keys  -> read module.masked_key_indices
+#             (no method uses this now; kept for DuoAttention, see "Open" in the notes).
 # All settings are kvpress defaults, written out so that the config file records them.
-# DuoAttention is not here yet: see "Open points" in the notes.
+# AdaKV was dropped by the team; DuoAttention is waiting for a team decision.
 METHODS = {
     "full": {"press": None, "attn": "sdpa", "kind": None},
     "snapkv": {"press": lambda r: SnapKVPress(compression_ratio=r, window_size=64, kernel_size=5), "attn": "sdpa", "kind": "scorer"},
-    "adakv": {"press": lambda r: AdaKVPress(SnapKVPress(compression_ratio=r, window_size=64, kernel_size=5), alpha_safeguard=0.20), "attn": "sdpa", "kind": "mask"},
     "streamingllm": {"press": lambda r: StreamingLLMPress(compression_ratio=r, n_sink=4), "attn": "sdpa", "kind": "scorer"},
     "random": {"press": lambda r: RandomPress(compression_ratio=r, seed=RANDOM_SEED), "attn": "sdpa", "kind": "scorer"},
     # Closest kvpress counterpart of H2O, not H2O itself; needs the attention weights, hence eager.
@@ -138,7 +134,7 @@ def attach_scorer_recorder(press: ScorerPress, store: dict[int, torch.Tensor]) -
 
 
 def read_masked_kept(model: PreTrainedModel, n_kv_heads: int, k_len: int) -> list[torch.Tensor]:
-    """Kept positions of a masking press (AdaKV), per layer, as (n_kv_heads, k_len) bool tensors.
+    """Kept positions of a masking press (e.g. DuoAttention; none is in METHODS now), per layer, as (n_kv_heads, k_len) bool tensors.
 
     The cache is not pruned: kvpress stores the evicted positions in module.masked_key_indices as
     (batch_idx, head_idx, position) and hides those keys at decoding time (kvpress/attention_patch.py).
@@ -160,26 +156,27 @@ def read_masked_kept(model: PreTrainedModel, n_kv_heads: int, k_len: int) -> lis
 # Prompt and span checks
 # ----------------------------------------------------------------------------------------------
 
-def load_shifted_spans() -> pd.DataFrame:
-    """Spans file with the +15 shift applied and the sentence text attached (for checking)."""
+def load_spans() -> pd.DataFrame:
+    """Spans file with the sentence text attached (for checking).
+
+    token_spans.py builds the prompt with prompts.build_text, the same code the runner uses, so the spans
+    index the run prompt directly (tok_end inclusive). check_spans verifies this for every question.
+    """
     spans = pd.read_parquet(SPANS_PATH).reset_index()
     sents = pd.read_parquet(CLEAN_PATH).reset_index()[["id", "title", "sent_id", "sentences"]]
     spans = spans.merge(sents, on=["id", "title", "sent_id"], how="left", validate="one_to_one")
-    spans["tok_start"] += SPAN_SHIFT
-    spans["tok_end"] += SPAN_SHIFT  # still inclusive
-    spans["n_tokens"] += SPAN_SHIFT
     return spans.set_index("id")
 
 
 def check_spans(qid: str, input_ids: list[int], tok: PreTrainedTokenizerBase, spans: pd.DataFrame) -> None:
-    """Stop the run if the prompt no longer lines up with the (shifted) spans file."""
+    """Stop the run if the prompt no longer lines up with the spans file (e.g. the prompt changed but the spans were not rebuilt)."""
     rows = spans.loc[[qid]]
     if len(input_ids) != rows["n_tokens"].iat[0]:
-        raise RuntimeError(f"{qid}: prompt has {len(input_ids)} tokens, spans file + {SPAN_SHIFT} expects {rows['n_tokens'].iat[0]}")
+        raise RuntimeError(f"{qid}: prompt has {len(input_ids)} tokens, spans file expects {rows['n_tokens'].iat[0]}")
     for r in rows.itertuples():
         decoded = tok.decode(input_ids[r.tok_start : r.tok_end + 1])
         if r.sentences.strip() not in decoded:
-            raise RuntimeError(f"{qid}: shifted span {r.tok_start}-{r.tok_end} decodes to {decoded!r}, expected {r.sentences!r}")
+            raise RuntimeError(f"{qid}: span {r.tok_start}-{r.tok_end} decodes to {decoded!r}, expected {r.sentences!r}")
 
 
 def inspect_kept(qid: str, input_ids: list[int], kept: np.ndarray, layer: int, tok: PreTrainedTokenizerBase, spans: pd.DataFrame, head: int = 0) -> None:
@@ -270,7 +267,7 @@ def answer_one(model: PreTrainedModel, tok: PreTrainedTokenizerBase, input_ids: 
         "prompt_tokens": n,
         "new_tokens": len(answer_ids),
         "truncated": not stopped,
-        "n_kept": int(kept.sum(axis=2).mean()),  # per head; AdaKV varies across heads, so this is the mean
+        "n_kept": int(kept.sum(axis=2).mean()),  # per head (mean over layers and heads)
         "kept_fraction": float(kept.mean()),
         "kv_cache_mb": kv_cache_bytes / 1024**2,
         "prefill_s": t1 - t0,
@@ -313,7 +310,7 @@ def main() -> None:
     ids = pd.read_parquet(CLEAN_PATH).index.unique()[: args.limit]
     questions = load_questions(ids)
     aliases = load_aliases()
-    spans = load_shifted_spans()
+    spans = load_spans()
 
     model, tok = load_model(spec["attn"], args.device)
     stop_ids = _stop_ids(model)
@@ -360,7 +357,7 @@ def main() -> None:
     config = {
         "method": args.method, "budget": args.budget, "press": press_settings, "attn_implementation": spec["attn"],
         "compression_ratio": "set per question so that int(budget * prompt_tokens) positions per head are kept, held-back token included",
-        "held_back_last_token": True, "span_shift": SPAN_SHIFT, "max_new_tokens": MAX_NEW_TOKENS, "n_questions": len(df),
+        "held_back_last_token": True,"max_new_tokens": MAX_NEW_TOKENS, "n_questions": len(df),
         "device": device_name(model), "versions": {p: version(p) for p in ("kvpress", "transformers", "torch")},
     }
     (ANSWERS_DIR / f"{name}_config.json").write_text(json.dumps(config, indent=2))
