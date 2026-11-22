@@ -1,0 +1,17 @@
+{
+  "method": "random",
+  "budget": 0.2,
+  "model": "Qwen/Qwen3-8B",
+  "press": "RandomPress(compression_ratio=0.8, seed=0)",
+  "attn_implementation": "sdpa",
+  "compression_ratio": "set per question so that int(budget * prompt_tokens) positions per head are kept, held-back token included (column compression_ratio)",
+  "held_back_last_token": true,
+  "max_new_tokens": 64,
+  "n_questions": 169,
+  "device": "NVIDIA L4",
+  "versions": {
+    "kvpress": "0.5.5",
+    "transformers": "5.2.0",
+    "torch": "2.14.1+cu130"
+  }
+}
