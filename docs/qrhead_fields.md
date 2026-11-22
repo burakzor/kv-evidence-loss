@@ -8,7 +8,7 @@ QRHead (query-focused retrieval heads) ranks the paragraphs of a prompt by the a
 
 1. Head detection (`scripts/qrhead_detect.py`, run once). 128 bridge questions are drawn from `data/hotpotqa/hotpot_bridge_ab.parquet` with seed 0, none of them in the clean set. Their two gold paragraphs are the paragraphs to be found. For every question, Qwen3-8B reads the prompt once with the real question and once with the content-free question `N/A`. For every head, the attention from the question tokens to each token, averaged over the question tokens, is taken with the question minus with `N/A`. This is the calibrated score of the token. In each paragraph, tokens more than two standard deviations below the paragraph's mean are dropped and the rest are summed, which gives the head's score for that paragraph. A head's QRScore is the summed score of the two gold paragraphs, averaged over the 128 questions. All 1,152 query heads (36 layers × 32 heads) are scored, and the 16 best are kept, the number QRHead uses for models under 10B parameters.
 
-2. Paragraph selection and answering (`scripts/qrhead_run.py`). For every clean question, the calibrated per-token scores of the 16 heads are added up, the same mean minus two standard deviations rule is applied inside each paragraph, and the remaining tokens are summed into one score per paragraph. This is done once per question. The 10 paragraphs are ranked from the highest score to the lowest, ties keeping their prompt order. For each budget, `select_paragraphs` chooses how many of the top paragraphs to keep (see below). The kept paragraphs, in their original order, go into a new prompt built by `scripts/prompts.py`, and Qwen3-8B answers from it with `scripts/generation.py`. The answer is scored with `scripts/scoring.py`.
+2. Paragraph selection and answering (`scripts/qrhead_run.py`). For every clean question, the calibrated per-token scores of the 16 heads are added up, the same mean minus two standard deviations rule is applied inside each paragraph, and the remaining tokens are summed into one score per paragraph. This is done once per question. The 10 paragraphs are ranked from the highest score to the lowest, ties keeping their prompt order. For each budget, `select_by_budget` from `scripts/icr.py` chooses how many of the top paragraphs to keep (see below). The kept paragraphs, in their original order, go into a new prompt built by `scripts/prompts.py`, and Qwen3-8B answers from it with `scripts/generation.py`. The answer is scored with `scripts/scoring.py`.
 
 Both steps use the prompt the model answers from, built by `scripts/prompts.py`, so the paragraph positions match `data/hotpotqa/hotpot_token_spans_qwen3_8b.parquet`. The question part of the prompt runs from `Question:` to the end of the chat template. A paragraph is the tokens of its sentences. When the tokenizer merges a paragraph's last character with the blank line after it, that token belongs to the paragraph.
 
@@ -16,7 +16,9 @@ Both steps use the prompt the model answers from, built by `scripts/prompts.py`,
 
 QRHead runs at budgets `0.2` and `0.1` only. One paragraph is about a tenth of the prompt, so at `0.05` the target would be about half a paragraph.
 
-`select_paragraphs` in `scripts/paragraph_budget.py` takes the paragraphs in rank order and keeps the top k, where k brings the kept tokens closest to `budget * prompt_tokens`. The kept tokens are the k paragraphs plus every token outside the paragraphs (the instruction, the question and the chat template), which are always kept. k is at least 1, and a tie goes to the smaller k. Because the target counts the whole prompt, `prompt_kept_fraction` is comparable with the kvpress methods, which keep the same share of every layer and head.
+QRHead imports ICR's function, `select_by_budget` in `scripts/icr.py`, so both methods choose paragraphs the same way. The target is `budget * prompt_tokens`. The best paragraph is always kept. The next paragraph in rank order is added as long as it does not move the total of the kept paragraphs' tokens further from the target, and the walk stops at the first paragraph that would. A paragraph that leaves the distance unchanged is added, so a tie goes to the larger number of paragraphs. Because the totals only grow, this keeps the number of paragraphs whose tokens come closest to the target.
+
+Only paragraph tokens count against the budget. The tokens outside the paragraphs (the instruction, the question and the chat template) are always kept on top of them, so `prompt_kept_fraction` is somewhat above the budget, unlike the kvpress methods, which keep exactly the budget. `prompt_kept_fraction` is recorded for every question, so the kept share can be compared directly.
 
 ## `data/hotpotqa/qrhead_scores_qwen3_8b.json`
 
@@ -87,7 +89,7 @@ All times are taken after `torch.cuda.synchronize()`. The memory counter is rese
 
 One file per question, written with `np.savez_compressed(path, kept=kept)`. It holds a single bool array `kept` of shape `(36 layers, 8 KV heads, prompt_tokens)`. It is True for every token of a kept paragraph and for every token outside the paragraphs (the instruction, the question, the chat template and any blank line that is a token of its own), and False for every token of a dropped paragraph. It is the same in every layer and KV head. No token belongs to two paragraphs. Positions are the same as in `data/hotpotqa/hotpot_token_spans_qwen3_8b.parquet`, and `scripts/qrhead_run.py` stops if the prompt length differs from `n_tokens` there. `scripts/retention.py` reads these masks directly, and QRHead gives every A and B sentence a `kept_fraction` of exactly 0 or 1.
 
-The trial run on 3 questions in `notebooks/run_qrhead.ipynb` writes its masks to `results/raw/kept_test/qrhead/{budget}/` and its answers to `/content/qrhead_test/answers/`, so it never mixes with the full run.
+The trial run on 3 questions in `notebooks/run_qrhead.ipynb` writes its masks to `results/raw/kept_limit3/qrhead/{budget}/`, as the runner and ICR do for test runs, and its answers to `/content/qrhead_test/answers/`, so it never mixes with the full run.
 
 ## `results/answers/qrhead_{budget}_config.json`
 
@@ -101,7 +103,7 @@ The settings of the run, one file per budget.
 | `heads` | str | the 16 heads used, as in `qrhead_heads_qwen3_8b.txt` |
 | `heads_file` | str | name of the heads file, e.g. `qrhead_heads_qwen3_8b.txt` |
 | `null_query` | str | the calibration question, `N/A` |
-| `selection` | str | the paragraph selection rule, `paragraph_budget.select_paragraphs, kept paragraphs in prompt order` |
+| `selection` | str | the paragraph selection rule, `icr.select_by_budget, kept paragraphs in prompt order` |
 | `attn_implementation` | str | `recorder`, the attention of `scripts/attention_recorder.py` |
 | `max_new_tokens` | int | generation limit, 64 |
 | `n_questions` | int | number of questions in the run |
@@ -119,7 +121,7 @@ The scoring follows `score_docs` and `score_docs_per_head_for_detection` in the 
 - Attention is read with `scripts/attention_recorder.py`. It computes the softmax of the recorded query rows in float32 on top of sdpa attention, with the model in bfloat16. The original uses its own model code with flash attention in float16.
 - The prompt is the project's prompt from `scripts/prompts.py`, the one the model answers from. It has no paragraph titles, no `[i]` numbers and no retrieval instruction, it says `Question:` instead of `Query:`, and it ends with Qwen3's chat template with an empty thinking block. Paragraph text is neither stripped nor truncated.
 - The heads are detected on 128 HotpotQA bridge questions with their two gold paragraphs, not on LongMemEval or Natural Questions. Paragraphs are identified by title instead of a document index, and the scores are saved as a JSON object keyed `"layer-head"`.
-- The number of kept paragraphs is chosen per question by the budget with `select_paragraphs`, instead of a fixed top k (5 in the original examples).
+- The number of kept paragraphs is chosen per question by the budget with ICR's `select_by_budget`, instead of a fixed top k (5 in the original examples).
 - The answer is generated by `scripts/generation.py` (greedy, at most 64 new tokens) from the project's prompt with the kept paragraphs in their original order. The original generates with vLLM at temperature 0, up to 500 tokens, with its own answer templates. It also restores the original order of the kept documents in its CLIPPER script.
 - The same Qwen3-8B model ranks the paragraphs and answers. In the original, retrieval and generation are separate runs and can use different models.
 
@@ -129,4 +131,3 @@ The scoring follows `score_docs` and `score_docs_per_head_for_detection` in the 
 - QRHead's answers tables have `prefill_s` and `decode_s_per_token` (always NaN). The ICR tables have neither.
 - ICR has `target_tokens` and `paragraph_tokens_kept`, and a per-paragraph score file, `results/icr_scores.parquet`. QRHead has none of these.
 - The config files name the paragraph rule `selection` (QRHead) and `budget_rule` (ICR). ICR's config also has `scoring`, `query_span` and `mask`, which QRHead's does not. QRHead's has `heads` and `heads_file`.
-- Test masks go to `results/raw/kept_test/qrhead/` for QRHead and to `results/raw/kept_limitN/` for ICR.

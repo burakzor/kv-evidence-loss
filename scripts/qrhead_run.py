@@ -11,7 +11,7 @@ from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer, DynamicCache, PreTrainedModel, PreTrainedTokenizerBase
 import attention_recorder
 from generation import MAX_NEW_TOKENS, generate_answer, get_device
-from paragraph_budget import select_paragraphs
+from icr import select_by_budget
 from prompts import build_prompt, load_questions
 from qrhead_detect import NULL_QUERY, compose_scoring_prompt, score_per_token_attention_to_query
 from run_full_baseline import device_name
@@ -142,13 +142,10 @@ def run(model_name: str, heads_path: Path, n_questions: int, answers_dir: Path, 
             raise RuntimeError(f"{qid}: prompt has {n_tokens} tokens, the spans file has {spans_n_tokens[qid]}")
 
         ranked_titles = rank_titles(doc_scores)
-        paragraph_lengths = {}
-        for title, (tok_start, tok_end) in doc_spans.items():
-            paragraph_lengths[title] = tok_end - tok_start + 1
-        n_other_tokens = n_tokens - sum(paragraph_lengths.values())
 
         for budget in BUDGETS:
-            kept_titles = select_paragraphs(ranked_titles, paragraph_lengths, n_other_tokens, n_tokens, budget)
+            # the same paragraph budget rule as ICR: only paragraph tokens count against budget * n_tokens
+            kept_titles = select_by_budget(ranked_titles, doc_spans, budget * n_tokens)
             prompt = build_prompt(tok, keep_context(q["context"], kept_titles), q["question"])
 
             sync(device)
@@ -200,7 +197,7 @@ def run(model_name: str, heads_path: Path, n_questions: int, answers_dir: Path, 
         df.to_parquet(answers_dir / f"qrhead_{budget}.parquet")
         config = {
             "method": "qrhead", "budget": budget, "model": model_name, "heads": attn_head_set, "heads_file": heads_path.name,
-            "null_query": NULL_QUERY, "selection": "paragraph_budget.select_paragraphs, kept paragraphs in prompt order",
+            "null_query": NULL_QUERY, "selection": "icr.select_by_budget, kept paragraphs in prompt order",
             "attn_implementation": attention_recorder.ATTN_NAME, "max_new_tokens": MAX_NEW_TOKENS, "n_questions": len(df),
             "device": device_name(model), "versions": {p: version(p) for p in ("transformers", "torch")},
         }
